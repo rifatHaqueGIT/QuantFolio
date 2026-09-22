@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantFolio — Correlated Monte Carlo Portfolio Risk & Frontier Engine</title>
+    <meta name="description" content="Simulate portfolio tail-risk, Value at Risk (VaR), Expected Shortfall (CVaR), and Markowitz Efficient Frontier using real market data via yfinance and Cholesky decomposition.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Chart.js & Plugins -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Top Navigation -->
+        <header class="navbar">
+            <div class="brand">
+                <div class="brand-badge">
+                    <span class="pulse-dot"></span>
+                    <span>QUANT ENGINE v1.0</span>
+                </div>
+                <h1>QuantFolio <span>/ Risk Simulator</span></h1>
+            </div>
+
+            <div class="header-presets">
+                <span class="preset-label">Load Preset:</span>
+                <button class="preset-btn ws-badge-btn" data-preset="my_wealthsimple" title="Load your 22 active Wealthsimple holdings">💼 My Wealthsimple (22)</button>
+                <button class="preset-btn" data-preset="canadian">Wealthsimple Balanced</button>
+                <button class="preset-btn active" data-preset="growth">US / CDN Growth</button>
+                <button class="preset-btn" data-preset="tech">Tech Leaders</button>
+                <button class="preset-btn" data-preset="allweather">All-Weather ETF</button>
+            </div>
+        </header>
+
+        <!-- Main Body Grid -->
+        <main class="dashboard-grid">
+            <!-- Sidebar: Parameters & Portfolio Input -->
+            <aside class="sidebar card">
+                <div class="section-title">
+                    <h2>Portfolio Holdings</h2>
+                    <span class="badge" id="total-weight-badge">100%</span>
+                </div>
+                <div class="ws-import-bar">
+                    <button id="open-ws-modal-btn" class="btn btn-sm btn-ws-action" title="Import trades from Wealthsimple CSV or paste">
+                        <span class="ws-sparkle">⚡</span> Import Wealthsimple CSV
+                    </button>
+                </div>
+                <p class="section-desc">Enter your tickers (e.g. <code>SHOP.TO</code>, <code>VFV.TO</code>, <code>AAPL</code>) and target weights.</p>
+
+                <div class="holdings-table-container">
+                    <table class="holdings-table">
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th>Weight (%)</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="holdings-tbody">
+                            <!-- Dynamic Rows -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="add-ticker-bar">
+                    <input type="text" id="new-ticker-input" placeholder="e.g. NVDA, XEQT.TO" uppercase>
+                    <input type="number" id="new-weight-input" placeholder="Weight %" min="1" max="100" value="20">
+                    <button id="add-ticker-btn" class="btn btn-secondary">+ Add</button>
+                </div>
+
+                <div class="holdings-actions">
+                    <button id="equalize-weights-btn" class="btn btn-sm btn-ghost">Equal Weight</button>
+                    <button id="normalize-weights-btn" class="btn btn-sm btn-ghost">Normalize to 100%</button>
+                </div>
+
+                <hr class="divider">
+
+                <div class="section-title">
+                    <h2>Simulation Settings</h2>
+                </div>
+
+                <div class="param-group">
+                    <label for="initial-capital">Starting Capital ($)</label>
+                    <div class="input-prefix">
+                        <span>$</span>
+                        <input type="number" id="initial-capital" value="25000" step="1000" min="500">
+                    </div>
+                </div>
+
+                <div class="param-row">
+                    <div class="param-group">
+                        <label for="time-horizon">Horizon (Trading Days)</label>
+                        <select id="time-horizon">
+                            <option value="63">3 Months (63d)</option>
+                            <option value="126">6 Months (126d)</option>
+                            <option value="252" selected>1 Year (252d)</option>
+                            <option value="504">2 Years (504d)</option>
+                        </select>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="sim-count">Simulations</label>
+                        <select id="sim-count">
+                            <option value="2000">2,000 paths</option>
+                            <option value="5000" selected>5,000 paths</option>
+                            <option value="10000">10,000 paths</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="param-row">
+                    <div class="param-group">
+                        <label for="lookback-period">Historical Lookback</label>
+                        <select id="lookback-period">
+                            <option value="1y">1 Year</option>
+                            <option value="2y">2 Years</option>
+                            <option value="3y" selected>3 Years</option>
+                            <option value="5y">5 Years</option>
+                        </select>
+                    </div>
+
+                    <div class="param-group">
+                        <label for="risk-free-rate">Risk-Free Rate</label>
+                        <select id="risk-free-rate">
+                            <option value="0.030">3.0%</option>
+                            <option value="0.035" selected>3.5%</option>
+                            <option value="0.040">4.0%</option>
+                            <option value="0.045">4.5%</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button id="run-sim-btn" class="btn btn-primary run-button">
+                    <span class="btn-spinner" id="btn-spinner"></span>
+                    <span class="btn-text">Run Monte Carlo Simulation</span>
+                </button>
+            </aside>
+
+            <!-- Main Analytics View -->
+            <section class="analytics-content">
+                <!-- KPI Banner Cards -->
+                <div class="kpi-grid">
+                    <div class="kpi-card" id="kpi-expected-val">
+                        <div class="kpi-header">
+                            <span class="kpi-label">Expected Terminal Wealth</span>
+                            <span class="kpi-tag positive" id="kpi-expected-ret">+0.0%</span>
+                        </div>
+                        <div class="kpi-value" id="val-expected">$0</div>
+                        <div class="kpi-subtext">Median: <span id="val-median">$0</span></div>
+                    </div>
+
+                    <div class="kpi-card risk" id="kpi-var-card">
+                        <div class="kpi-header">
+                            <span class="kpi-label">95% Value at Risk (VaR)</span>
+                            <span class="kpi-tag danger" id="kpi-var-pct">-0.0%</span>
+                        </div>
+                        <div class="kpi-value" id="val-var">$0</div>
+                        <div class="kpi-subtext">5% chance of exceeding this 1-yr loss</div>
+                    </div>
+
+                    <div class="kpi-card danger-accent" id="kpi-cvar-card">
+                        <div class="kpi-header">
+                            <span class="kpi-label">95% Expected Shortfall (CVaR)</span>
+                            <span class="kpi-tag danger" id="kpi-cvar-pct">-0.0%</span>
+                        </div>
+                        <div class="kpi-value" id="val-cvar">$0</div>
+                        <div class="kpi-subtext">Avg loss when tail event occurs</div>
+                    </div>
+
+                    <div class="kpi-card" id="kpi-prob-loss-card">
+                        <div class="kpi-header">
+                            <span class="kpi-label">Probability of Loss</span>
+                            <span class="kpi-icon">📉</span>
+                        </div>
+                        <div class="kpi-value" id="val-prob-loss">0.0%</div>
+                        <div class="kpi-subtext">Chance capital < initial after 1 yr</div>
+                    </div>
+
+                    <div class="kpi-card" id="kpi-vol-card">
+                        <div class="kpi-header">
+                            <span class="kpi-label">Annualized Volatility</span>
+                            <span class="kpi-icon">⚡</span>
+                        </div>
+                        <div class="kpi-value" id="val-volatility">0.0%</div>
+                        <div class="kpi-subtext">Covariance-adjusted risk</div>
+                    </div>
+
+                    <div class="kpi-card" id="kpi-sharpe-card">
+                        <div class="kpi-header">
+                            <span class="kpi-label">Sharpe Ratio</span>
+                            <span class="kpi-tag neutral" id="kpi-sharpe-tag">Rf = 3.5%</span>
+                        </div>
+                        <div class="kpi-value" id="val-sharpe">0.00</div>
+                        <div class="kpi-subtext" id="val-sharpe-rating">Excess return per unit risk</div>
+                    </div>
+                </div>
+
+                <!-- Navigation Tabs -->
+                <div class="analytics-tabs">
+                    <button class="tab-btn active" data-tab="tab-trajectories">Trajectory Fan Chart</button>
+                    <button class="tab-btn" data-tab="tab-distribution">Tail-Risk Distribution</button>
+                    <button class="tab-btn" data-tab="tab-frontier">Markowitz Efficient Frontier</button>
+                    <button class="tab-btn" data-tab="tab-correlation">Correlation & Assets</button>
+                </div>
+
+                <!-- TAB 1: Simulation Fan Chart -->
+                <div class="tab-content active" id="tab-trajectories">
+                    <div class="chart-card card">
+                        <div class="chart-card-header">
+                            <div>
+                                <h3>Correlated Monte Carlo Trajectory Fan</h3>
+                                <p class="chart-subtitle">Projected portfolio value over time across thousands of Cholesky-correlated geometric Brownian motion paths.</p>
+                            </div>
+                            <div class="chart-legend-custom">
+                                <span class="legend-pill band-90">90% Confidence Interval (p5 - p95)</span>
+                                <span class="legend-pill band-50">50% Central Range (p25 - p75)</span>
+                                <span class="legend-pill line-median">Median Path (p50)</span>
+                            </div>
+                        </div>
+                        <div class="canvas-wrapper">
+                            <canvas id="trajectoryChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 2: Tail Risk & Histogram -->
+                <div class="tab-content" id="tab-distribution">
+                    <div class="chart-card card">
+                        <div class="chart-card-header">
+                            <div>
+                                <h3>Terminal Wealth Distribution & Tail Cutoffs</h3>
+                                <p class="chart-subtitle">Simulated portfolio valuation histogram at horizon maturity, illustrating 95% VaR and Expected Shortfall thresholds.</p>
+                            </div>
+                        </div>
+                        <div class="canvas-wrapper">
+                            <canvas id="distributionChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="card drawdown-card">
+                        <h3>Drawdown & Tail Risk Diagnostics</h3>
+                        <div class="stats-row">
+                            <div class="stat-box">
+                                <span class="stat-name">Median Max Drawdown</span>
+                                <span class="stat-number" id="diag-median-mdd">0.0%</span>
+                                <span class="stat-hint">Typical peak-to-trough drop</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-name">95th Percentile Drawdown</span>
+                                <span class="stat-number danger-text" id="diag-worst-mdd">0.0%</span>
+                                <span class="stat-hint">Severe market crash scenario</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-name">99% 1-Year VaR</span>
+                                <span class="stat-number danger-text" id="diag-var-99">$0</span>
+                                <span class="stat-hint">1-in-100 year loss limit</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-name">99% Expected Shortfall</span>
+                                <span class="stat-number danger-text" id="diag-cvar-99">$0</span>
+                                <span class="stat-hint">Worst 1% catastrophe average</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 3: Efficient Frontier -->
+                <div class="tab-content" id="tab-frontier">
+                    <div class="chart-card card">
+                        <div class="chart-card-header">
+                            <div>
+                                <h3>Markowitz Mean-Variance Efficient Frontier</h3>
+                                <p class="chart-subtitle">Compare your current allocation against Equal-Weight ($1/N$), Minimum Volatility, and Maximum Sharpe Ratio portfolios.</p>
+                            </div>
+                        </div>
+                        <div class="canvas-wrapper">
+                            <canvas id="frontierChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Comparison Table -->
+                    <div class="card comparison-card">
+                        <h3>Portfolio Strategy Benchmark</h3>
+                        <div class="table-responsive">
+                            <table class="benchmark-table">
+                                <thead>
+                                    <tr>
+                                        <th>Strategy</th>
+                                        <th>Expected Return</th>
+                                        <th>Annual Volatility</th>
+                                        <th>Sharpe Ratio</th>
+                                        <th>Key Weight Allocation</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="benchmark-tbody">
+                                    <!-- Populated via JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 4: Correlation & Asset Breakdown -->
+                <div class="tab-content" id="tab-correlation">
+                    <div class="two-col-grid">
+                        <div class="card">
+                            <h3>Asset Allocation Breakdown</h3>
+                            <div class="canvas-wrapper doughnut-wrapper">
+                                <canvas id="allocationChart"></canvas>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <h3>Historical Correlation Matrix</h3>
+                            <p class="chart-subtitle">Empirical Pearson correlation coefficients computed from daily log returns.</p>
+                            <div id="correlation-matrix-container" class="corr-table-wrapper">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card asset-stats-card">
+                        <h3>Individual Asset Historical Risk & Return</h3>
+                        <div class="table-responsive">
+                            <table class="asset-table">
+                                <thead>
+                                    <tr>
+                                        <th>Ticker</th>
+                                        <th>Current Weight</th>
+                                        <th>Annual Return</th>
+                                        <th>Annual Volatility</th>
+                                        <th>Asset Sharpe</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="asset-stats-tbody">
+                                    <!-- Populated dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Error Toast Notification -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- Wealthsimple Import Modal -->
+    <div id="ws-modal" class="modal-overlay hidden">
+        <div class="modal-content card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="ws-logo-pill">Wealthsimple</span>
+                    <h2>Import Portfolio Trades</h2>
+                </div>
+                <button id="close-ws-modal-btn" class="btn-close-modal">&times;</button>
+            </div>
+            
+            <p class="modal-desc">
+                Upload your Wealthsimple positions CSV export or paste your trade records below. We'll automatically map Canadian & US tickers (<code>.TO</code>, <code>.V</code>, CDRs), calculate CAD weights from real market values, and set your initial capital.
+            </p>
+
+            <div class="modal-tabs">
+                <button class="modal-tab-btn active" data-modaltab="tab-paste">Paste CSV Text</button>
+                <button class="modal-tab-btn" data-modaltab="tab-upload">Upload CSV File</button>
+                <button class="modal-tab-btn" data-modaltab="tab-quickload">Quick-Load My Trades</button>
+            </div>
+
+            <!-- Tab: Paste -->
+            <div class="modal-tab-pane active" id="tab-paste">
+                <textarea id="ws-csv-textarea" class="ws-textarea" placeholder="Paste your Wealthsimple export CSV text here (e.g. Account Name, Account Type, Symbol, Market Value...)..."></textarea>
+                <div class="modal-actions-bar">
+                    <button id="parse-csv-btn" class="btn btn-primary">Parse CSV Data</button>
+                </div>
+            </div>
+
+            <!-- Tab: Upload -->
+            <div class="modal-tab-pane" id="tab-upload">
+                <div class="drop-zone" id="ws-drop-zone">
+                    <div class="drop-zone-icon">📁</div>
+                    <p class="drop-zone-text">Drag & drop your Wealthsimple <code>.csv</code> file here</p>
+                    <span class="drop-zone-sub">or click to browse from your computer</span>
+                    <input type="file" id="ws-file-input" accept=".csv,text/csv" class="hidden-file-input">
+                </div>
+            </div>
+
+            <!-- Tab: Quick-load -->
+            <div class="modal-tab-pane" id="tab-quickload">
+                <div class="quick-load-box">
+                    <div class="quick-load-info">
+                        <h4>Pre-loaded Portfolio Export</h4>
+                        <p>22 holdings detected across your TFSA, FHSA, and Non-registered accounts totaling <strong>$15,103.94 CAD</strong> ($25,233.22 CAD including cash reserves).</p>
+                    </div>
+                    <button id="load-preloaded-ws-btn" class="btn btn-primary">Load My Exported Holdings</button>
+                </div>
+            </div>
+
+            <!-- Parsed Results Preview -->
+            <div id="ws-preview-container" class="ws-preview-section hidden">
+                <hr class="divider">
+                <div class="ws-preview-header">
+                    <div class="account-selector-group">
+                        <label for="ws-account-select">Account View:</label>
+                        <select id="ws-account-select" class="ws-select">
+                            <option value="All Accounts">All Accounts (Consolidated)</option>
+                        </select>
+                    </div>
+                    <div class="ws-summary-pills">
+                        <span class="pill pill-invested" id="ws-total-invested">Invested: $0 CAD</span>
+                        <span class="pill pill-cash" id="ws-total-cash">Cash: $0 CAD</span>
+                    </div>
+                </div>
+
+                <div class="ws-options-row">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="ws-include-cash-checkbox">
+                        <span>Include Cash Reserves in Starting Capital (Total: <span id="ws-total-with-cash">$0</span>)</span>
+                    </label>
+                </div>
+
+                <div class="ws-table-container">
+                    <table class="ws-preview-table">
+                        <thead>
+                            <tr>
+                                <th>Include</th>
+                                <th>Ticker</th>
+                                <th>Name</th>
+                                <th>Account</th>
+                                <th>Market Value (CAD)</th>
+                                <th>Weight (%)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ws-preview-tbody">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="modal-footer">
+                    <button id="apply-ws-holdings-btn" class="btn btn-primary btn-large">
+                        <span>Apply to Portfolio & Run Simulation</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
