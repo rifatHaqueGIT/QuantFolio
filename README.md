@@ -73,11 +73,4 @@ python test_engine.py
 
 ---
 
-## Resume & Interview Talking Points
 
-- **Why manual entry instead of bank scraping?**
-  *"Financial institutions do not offer open public APIs without aggregator agreements like Plaid or SnapTrade. Scraping unofficial endpoints requires sharing raw credentials and violates Terms of Service. By ingesting tickers and weights cleanly and feeding them into public market feeds via yfinance, the data pipeline is resilient, production-ready, and compliant."*
-- **Why Cholesky decomposition instead of simulating single-ticker paths independently?**
-  *"Assets in a portfolio do not move independently; tech stocks move together, and broad index ETFs share high beta with their constituents. Uncorrelated simulations drastically underestimate portfolio tail risk. Factoring the covariance matrix via Cholesky decomposition ($Z_{corr} = L \cdot Z_{indep}$) ensures realistic joint shocks."*
-- **VaR vs. CVaR:**
-  *"While 95% VaR answers 'What is the maximum I can expect to lose 95% of the time?', it tells you nothing about the severity of losses in the remaining 5% catastrophic tail. CVaR (Expected Shortfall) calculates the average loss conditional on exceeding VaR, making it a coherent risk measure that properly penalizes fat-tailed downside events."*

@@ -17,4 +17,5 @@ ENV/
 Thumbs.db
 
 # Large research papers (optional)
-# *.pdf
+*.pdf
+hide.md
