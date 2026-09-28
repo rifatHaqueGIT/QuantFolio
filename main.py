@@ -1,6 +1,7 @@
 """
 FastAPI Server for Portfolio Monte Carlo Risk Simulator & Optimization Engine
 Serves API endpoints and the rich frontend dashboard.
+Includes gs-quant-inspired extensions for advanced analytics.
 """
 
 from typing import List, Optional
@@ -14,11 +15,19 @@ import os
 from engine.data_loader import fetch_historical_data, compute_portfolio_statistics, parse_wealthsimple_csv
 from engine.monte_carlo import run_monte_carlo_simulation
 from engine.optimizer import calculate_efficient_frontier
+from engine.gs_quant_extensions import (
+    compute_gs_quant_analytics,
+    backtest_portfolio,
+    smooth_spikes,
+    smooth_outliers,
+    RebalFreq,
+    ThresholdType,
+)
 
 app = FastAPI(
     title="Monte Carlo Portfolio Risk Engine",
-    description="Quantitative portfolio risk simulation and Modern Portfolio Theory optimization",
-    version="1.0.0"
+    description="Quantitative portfolio risk simulation, Modern Portfolio Theory optimization, and gs-quant-inspired analytics",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -38,6 +47,8 @@ class SimulationRequest(BaseModel):
     num_simulations: int = Field(default=5000, ge=500, le=20000)
     period: str = Field(default="3y")
     risk_free_rate: float = Field(default=0.035, ge=0.0, le=0.20)
+    smooth_data: bool = Field(default=False, description="Apply gs-quant spike/outlier smoothing to price data")
+    smooth_threshold: float = Field(default=0.5, ge=0.05, le=2.0, description="Smoothing threshold (0.5 = 50% deviation)")
 
 
 @app.post("/api/simulate")
@@ -50,6 +61,17 @@ async def simulate_portfolio(req: SimulationRequest):
         weights = req.weights[:len(valid_tickers)]
         if len(weights) < len(valid_tickers):
             weights += [1.0 / len(valid_tickers)] * (len(valid_tickers) - len(weights))
+
+        # 1b. Optional gs-quant data smoothing
+        if req.smooth_data:
+            for col in price_df.columns:
+                price_df[col] = smooth_outliers(price_df[col], threshold=req.smooth_threshold)
+                if len(price_df[col]) > 3:
+                    smoothed = smooth_spikes(price_df[col], threshold=req.smooth_threshold)
+                    # Re-index to align (smooth_spikes drops first/last points)
+                    price_df.loc[smoothed.index, col] = smoothed
+            # Recompute returns from smoothed prices
+            returns_df = price_df.pct_change().dropna()
 
         # 2. Portfolio & Asset Statistics
         stats = compute_portfolio_statistics(
@@ -79,13 +101,24 @@ async def simulate_portfolio(req: SimulationRequest):
             num_random_portfolios=500
         )
 
+        # 5. GS-Quant Analytics (EWMA vol, rolling Sharpe, excess returns)
+        gs_analytics = compute_gs_quant_analytics(
+            price_df=price_df,
+            returns_df=returns_df,
+            weights=weights,
+            risk_free_rate=req.risk_free_rate,
+            trading_days=252
+        )
+
         return {
             "status": "success",
             "tickers": valid_tickers,
             "weights": stats["weights"],
             "stats": stats,
             "simulation": mc_results,
-            "optimization": frontier_data
+            "optimization": frontier_data,
+            "gs_quant_analytics": gs_analytics,
+            "data_smoothed": req.smooth_data
         }
 
     except ValueError as e:
@@ -115,6 +148,100 @@ async def parse_wealthsimple(req: WealthsimpleParseRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Parse error: {str(e)}")
 
+
+# ─── GS-Quant Extension Endpoints ─────────────────────────────────────────────
+
+class BacktestRequest(BaseModel):
+    tickers: List[str] = Field(default=["SPY", "AGG", "GLD"])
+    weights: List[float] = Field(default=[0.6, 0.3, 0.1])
+    period: str = Field(default="3y")
+    rebal_freq: str = Field(default="monthly", description="daily, weekly, or monthly")
+    costs_bps: float = Field(default=10.0, ge=0.0, le=100.0, description="Transaction cost in basis points per asset")
+    initial_value: float = Field(default=10000.0, ge=100.0)
+
+
+@app.post("/api/backtest")
+async def run_backtest(req: BacktestRequest):
+    """
+    GS-Quant-style basket backtesting with periodic rebalancing and transaction costs.
+    Inspired by gs-quant's backtest_basket() from backtesting.py.
+    """
+    try:
+        price_df, _, valid_tickers = fetch_historical_data(req.tickers, period=req.period)
+
+        weights = req.weights[:len(valid_tickers)]
+        if len(weights) < len(valid_tickers):
+            weights += [1.0 / len(valid_tickers)] * (len(valid_tickers) - len(weights))
+
+        freq_map = {
+            "daily": RebalFreq.DAILY,
+            "weekly": RebalFreq.WEEKLY,
+            "monthly": RebalFreq.MONTHLY,
+        }
+        rebal = freq_map.get(req.rebal_freq.lower(), RebalFreq.MONTHLY)
+
+        # Convert bps to fraction per asset
+        cost_fraction = req.costs_bps / 10000.0
+        costs = [cost_fraction] * len(valid_tickers)
+
+        result = backtest_portfolio(
+            price_df=price_df,
+            weights=weights,
+            costs=costs,
+            rebal_freq=rebal,
+            initial_value=req.initial_value
+        )
+
+        return {
+            "status": "success",
+            "tickers": valid_tickers,
+            "backtest": result
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Backtest error: {str(e)}")
+
+
+class AnalyticsRequest(BaseModel):
+    tickers: List[str] = Field(default=["XEQT.TO", "SHOP.TO", "TD.TO", "AAPL", "VFV.TO"])
+    weights: List[float] = Field(default=[0.30, 0.15, 0.15, 0.20, 0.20])
+    period: str = Field(default="3y")
+    risk_free_rate: float = Field(default=0.035, ge=0.0, le=0.20)
+
+
+@app.post("/api/analytics")
+async def get_analytics(req: AnalyticsRequest):
+    """
+    GS-Quant-inspired analytics: EWMA volatility, Garman-Klass vol,
+    rolling Sharpe ratio, and day-count-correct excess returns.
+    """
+    try:
+        price_df, returns_df, valid_tickers = fetch_historical_data(req.tickers, period=req.period)
+
+        weights = req.weights[:len(valid_tickers)]
+        if len(weights) < len(valid_tickers):
+            weights += [1.0 / len(valid_tickers)] * (len(valid_tickers) - len(weights))
+
+        analytics = compute_gs_quant_analytics(
+            price_df=price_df,
+            returns_df=returns_df,
+            weights=weights,
+            risk_free_rate=req.risk_free_rate,
+            trading_days=252
+        )
+
+        return {
+            "status": "success",
+            "tickers": valid_tickers,
+            "analytics": analytics
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analytics error: {str(e)}")
 
 
 # Serve frontend static assets
